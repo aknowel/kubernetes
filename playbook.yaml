@@ -1,0 +1,198 @@
+---
+- name: Install & Configure Basic Software
+  hosts: all
+  become: true
+
+  vars:
+    packages:
+      - htop
+      - wget
+      - git
+      # - cockpit
+
+  tasks:
+  - name: Disable zram swap
+    ansible.builtin.dnf:
+     name: zram-generator-defaults
+     state: absent
+
+  - name: Disable SWAP in fstab
+    ansible.builtin.replace:
+      path: /etc/fstab
+      regexp: '^([^#].*?\sswap\s+\s+.*)$'
+      replace: '# \1'
+
+  - name: Install packages
+    ansible.builtin.dnf:
+      name: "{{ packages }}"
+      state: latest
+
+  # - name: Enable cockpit
+  #   ansible.builtin.systemd:
+  #     name: cockpit.socket
+  #     state: started
+  #     enabled: true
+  
+  - name: "Reboot"
+    ansible.builtin.reboot:
+
+
+- name: Install Kubernetes requirements
+  hosts: all
+  become: true
+
+  vars:
+    packages:
+      - cri-o
+      - kubelet
+      - kubeadm
+      - kubectl
+      - helm
+
+  tasks:
+  - name: Put SELinux in permissive mode, logging actions that would be blocked
+    ansible.posix.selinux:
+      policy: targeted
+      state: permissive
+
+  - name: Add kubernetes repository
+    ansible.builtin.yum_repository:
+      file: kubernetes
+      name: kubernetes
+      description: Kubernetes
+      baseurl: https://packages.cloud.google.com/yum/repos/kubernetes-el7-$basearch
+      enabled: true
+      gpgcheck: true
+      gpgkey: https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+      exclude: [ kubelet, kubeadm, kubectl ]
+
+  - name: Load overlay kernel module
+    community.general.modprobe:
+      name: overlay
+      state: present
+
+  - name: Load br_netfilter kernel module
+    community.general.modprobe:
+      name: br_netfilter
+      state: present
+
+  - name: Set net.bridge.bridge-nf-call-iptables sysctl config
+    ansible.posix.sysctl:
+      name: net.bridge.bridge-nf-call-iptables
+      value: "1"
+      sysctl_set: true
+      state: present
+
+  - name: Set net.bridge.bridge-nf-call-ip6tables sysctl config
+    ansible.posix.sysctl:
+      name: net.bridge.bridge-nf-call-ip6tables
+      value: "1"
+      sysctl_set: true
+      state: present
+
+  - name: Set net.ipv4.ip_forward sysctl config
+    ansible.posix.sysctl:
+      name: net.ipv4.ip_forward
+      value: "1"
+      sysctl_set: true
+      state: present
+      reload: true
+
+  - name: Install packages
+    ansible.builtin.dnf:
+      name: "{{ packages }}"
+      state: latest
+      disable_excludes: kubernetes
+  
+  - name: Enable & Start crio
+    ansible.builtin.systemd:
+      name: crio
+      state: started
+      enabled: true
+
+  - name: Enable & Start kubelet
+    ansible.builtin.systemd:
+      name: kubelet
+      state: started
+      enabled: true
+
+
+- name: Install Kubernetes requirements
+  hosts: all
+
+  tasks:
+  - name: kubeadm init
+    become: true
+    ansible.builtin.shell: kubeadm init --pod-network-cidr 192.168.0.0/16
+
+  - name: mkdir .kube
+    ansible.builtin.shell: mkdir -p /home/vagrant/.kube
+
+  - name: cp config
+    become: true
+    ansible.builtin.shell: cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+
+  - name: chown config
+    become: true
+    ansible.builtin.shell: chown vagrant:vagrant /home/vagrant/.kube/config
+
+  - name: kubectl untaint
+    ansible.builtin.shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+
+  - name: helm repo add nginx ingress controller
+    ansible.builtin.shell: helm repo add nginx-stable https://helm.nginx.com/stable
+
+  - name: helm repo update
+    ansible.builtin.shell: helm repo update
+
+  - name: wait for all pods ready
+    ansible.builtin.shell: kubectl wait pod --all -A --for condition=Ready --timeout=1h
+
+  - name: install calico
+    ansible.builtin.shell: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+  
+  - name: wait for all pods ready
+    ansible.builtin.shell: kubectl wait pod --all -A --for condition=Ready --timeout=1h
+
+  - name: set strictARP
+    ansible.builtin.shell: |
+      kubectl get configmap kube-proxy -n kube-system -o yaml | \
+      sed -e "s/strictARP: false/strictARP: true/" | \
+      kubectl apply -f - -n kube-system
+
+  - name: install metallb
+    ansible.builtin.shell: kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.9/config/manifests/metallb-native.yaml
+
+  - name: wait for all pods ready
+    ansible.builtin.shell: kubectl wait pod --all -A --for condition=Ready --timeout=1h
+  
+  - name: create metallb configuration
+    ansible.builtin.copy:
+      dest: /tmp/metallb.yaml
+      content: |
+        apiVersion: metallb.io/v1beta1
+        kind: IPAddressPool
+        metadata:
+          name: pool
+          namespace: metallb-system
+        spec:
+          addresses:
+          - 10.20.30.40-10.20.30.50
+        ---
+        apiVersion: metallb.io/v1beta1
+        kind: L2Advertisement
+        metadata:
+          name: base
+          namespace: metallb-system
+        spec:
+          ipAddressPools:
+          - pool
+
+  - name: configure metallb
+    ansible.builtin.shell: kubectl apply -f /tmp/metallb.yaml
+
+  - name: helm install nginx ingress controller
+    ansible.builtin.shell: |
+      helm install nginx-ingress-controller --create-namespace -n ingress-controller \
+      --set controller.service.loadBalancerIP=10.20.30.45,controller.setAsDefaultIngress=true,controller.ingressClass=nginx \
+      nginx-stable/nginx-ingress
