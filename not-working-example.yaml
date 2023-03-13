@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: not-working-nginx-deployment
   labels:
-    app: nginx
+    app: not-working-nginx
 spec:
   selector:
     matchLabels:
-      app: nginx
+      app: not-working-nginx
   template:
     metadata:
       labels:
-        app: nginx
+        app: not-working-nginx
     spec:
       containers:
-      - name: nginx
+      - name: not-working-nginx
         image: nginx:1.23.3
         ports:
         - containerPort: 80
@@ -22,10 +22,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: nginx-service
+  name: not-working-nginx-service
 spec:
   selector:
-    app: nginx
+    app: not-working-nginx
   ports:
     - protocol: TCP
       port: 80
@@ -34,7 +34,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: nginx-ingress
+  name: not-working-nginx-ingress
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
@@ -46,6 +46,6 @@ spec:
         pathType: Prefix
         backend:
           service:
-            name: nginx-service
+            name: not-working-nginx-service
             port:
               number: 80

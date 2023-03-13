@@ -28,13 +28,11 @@ To delete vm use
 sudo vagrant destroy
 ```
 
-To check deploy working-deployment.yaml and run
-```shell
-curl http://10.20.30.40/
-```
+To check deploy working-example.yaml and open browser with
+http://192.168.121.40/
 
-Then delete working-deployment.yaml and deploy not-working-example.yaml and run
-```shell
-curl http://10.20.30.45/
-```
+
+Then deploy not-working-example.yaml open browser with
+http://192.168.121.45/
+
 Output should be the same because it is the same container, but it isn't
